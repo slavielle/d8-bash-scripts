@@ -1,0 +1,8 @@
+GIT_REPO_URL="git@bitbucket.org:company/repo.git"
+SOURCE_BRANCH="origin/master"
+DEPLOY_BRANCH="build"
+BUILD_FOLDER_ROOT="/absolute/path/to/build/dir"
+BUILD_FOLDER="master"
+THEME_DIR="reative/path/to/theme/dir"
+REMOTE_DRUSH_ALIAS="@dev.dev"
+NPM_RUN_SCRIPT="build-production"

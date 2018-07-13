@@ -1,0 +1,197 @@
+#!/bin/bash
+
+SCRIPT_PATH="$(realpath "$(pwd)/$(dirname $0)")"
+
+# Parse options.
+OPT_FORCE_CLONE=false
+OPT_FORCE_PURGE_DEPENDENCIES=false
+ARG_CONTEXT=""
+declare -a CONTRIB_DIR_LIST=('vendor' 'web/core' 'web/modules/contrib' 'web/themes/contrib' 'web/profiles/contrib' 'web/libraries');
+declare -a REQUIRED_CONF_VAR_LIST=('GIT_REPO_URL' 'SOURCE_BRANCH' 'DEPLOY_BRANCH' 'BUILD_FOLDER_ROOT' 'BUILD_FOLDER' 'THEME_DIR' 'NPM_RUN_SCRIPT');
+
+
+# GIT_REPO_URL="git@bitbucket.org:slavielle/sylvain-lavielle-net.git"
+# SOURCE_BRANCH="origin/master"
+# DEPLOY_BRANCH="build"
+# BUILD_FOLDER_ROOT="/var/shore/build"
+# BUILD_FOLDER="master"
+# THEME_DIR="web/themes/custom/sla_theme"
+# REMOTE_DRUSH_ALIAS="@dev.dev"
+# NPM_RUN_SCRIPT="build-production"
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+
+        -f|--force-clone)
+            OPT_FORCE_CLONE=true
+            shift
+        ;;
+
+        -p|--purge-dependencies)
+            OPT_FORCE_PURGE_DEPENDENCIES=true
+            shift
+        ;;
+
+        -*)
+            echo "Unknown option \"$1\""
+            exit 1
+            # unknown option
+        ;;
+        *)
+            if [ -z "$ARG_CONTEXT" ]; then
+              ARG_CONTEXT="$1"
+              shift
+            else
+              echo "Only one argument expected \"$1\""
+              exit 1
+            fi
+        ;;
+    esac
+done
+
+if [ -z "$ARG_CONTEXT" ]; then
+  ARG_CONTEXT="default"
+fi
+
+if [ ! -f "$SCRIPT_PATH/variables.$ARG_CONTEXT.sh" ]; then
+  echo "variable file not found: variables.$ARG_CONTEXT.sh"
+  exit 1
+fi
+
+# Import configuration variable file
+. "$SCRIPT_PATH/variables.$ARG_CONTEXT.sh"
+
+# Test if all required variable are defined.
+for REQUIRED_CONF_VAR in "${REQUIRED_CONF_VAR_LIST[@]}"; do :
+  if [ -z "${!REQUIRED_CONF_VAR}" ]; then
+    echo "[ERROR] undefined conf variable: $REQUIRED_CONF_VAR"
+    exit 1
+  fi
+done
+
+SOURCE_DEPLOY_BRANCH="origin/$DEPLOY_BRANCH"
+BUILD_FOLDER_FULL_PATH="$BUILD_FOLDER_ROOT/$BUILD_FOLDER"
+
+if [ ! -d "$BUILD_FOLDER_ROOT" ]; then
+  echo "[ERROR] build base directory does not exist"
+  exit 1
+fi
+
+# Go to root cache folder & git clone
+cd "$BUILD_FOLDER_ROOT"
+if [ "$OPT_FORCE_CLONE" = true ] || [ ! -d "$BUILD_FOLDER" ]; then
+  echo "Creating build folder and git clone master branch of project..."
+  echo
+  rm -rf $BUILD_FOLDER_FULL_PATH
+  git clone -b "$DEPLOY_BRANCH" "$GIT_REPO_URL" "$BUILD_FOLDER"
+else
+  cd "$BUILD_FOLDER_FULL_PATH"
+  if [ "$(git rev-parse --abbrev-ref HEAD)" != "$DEPLOY_BRANCH" ]; then
+    echo "[ERROR] looks like build directory is not using the build branch ... can't continue. try with --force-clone option"
+    exit 1
+  fi
+fi
+
+if [ ! -d "${BUILD_FOLDER_FULL_PATH}" ]; then
+  echo "[ERROR] build directory was not created"
+  exit 1
+fi
+
+cd "$BUILD_FOLDER_FULL_PATH"
+
+# Fetch
+git fetch 2>&1 >/dev/null
+if [ $? -ne 0 ]; then
+    echo "[ERROR] can't perform a git fetch"
+    exit 1
+fi
+
+LOOP=true
+while [ "$LOOP" = true ]; do
+  LOCAL=$(git rev-parse @)
+  REMOTE=$(git rev-parse "$SOURCE_DEPLOY_BRANCH")
+  BASE=$(git merge-base @ "$SOURCE_DEPLOY_BRANCH")
+
+  echo ">>>>> $LOCAL $REMOTE $BASE"
+  if [ $LOCAL = $REMOTE ]; then
+    echo "$SOURCE_DEPLOY_BRANCH local build directory is up to date ... continue"
+    LOOP=false
+  elif [ $LOCAL = $BASE ]; then
+    echo "$SOURCE_DEPLOY_BRANCH local build directory is outdated. someone else performed a deploy since your last deploy... attempting to make a git pull"
+    git pull
+    if [ $? -ne 0 ]; then
+        echo "[ERROR] can't perform a git pull"
+        exit 1
+    fi
+  elif [ $REMOTE = $BASE ]; then
+    echo "$SOURCE_DEPLOY_BRANCH local build directory need to be pushed or is inconsistent. Trying reset"
+    git reset --hard "$SOURCE_DEPLOY_BRANCH"
+  else
+    echo "[ERROR] $SOURCE_DEPLOY_BRANCH local build diverged ... can't continue. try with --force-clone option"
+    exit 1
+  fi
+done
+
+# Merge dev branch into deploy branch
+echo "Merging $SOURCE_BRANCH to $DEPLOY_BRANCH"
+git merge "$SOURCE_BRANCH" --message "Merge $SOURCE_BRANCH to $DEPLOY_BRANCH"
+
+# active gitignore for deploy branch
+cp .gitignore.build .gitignore
+
+# Remove modules to force composer update
+#
+if [ "$OPT_FORCE_PURGE_DEPENDENCIES" = true ]; then
+  for CONTRIB_DIR in "${CONTRIB_DIR_LIST[@]}"; do :
+  if [ -d "$BUILD_FOLDER_FULL_PATH/$CONTRIB_DIR" ]; then
+      rm -rf "$BUILD_FOLDER_FULL_PATH/$CONTRIB_DIR/*"
+    fi
+  done
+fi
+
+cd "$BUILD_FOLDER_FULL_PATH"
+# Get dependencies
+composer install
+
+# Remove .git dir from some dependencies
+
+for CONTRIB_DIR in "${CONTRIB_DIR_LIST[@]}"; do :
+  if [ -d "$BUILD_FOLDER_FULL_PATH/$CONTRIB_DIR" ]; then
+    cd "$BUILD_FOLDER_FULL_PATH/$CONTRIB_DIR"
+    find -type d -name ".git" -prune -exec rm -rf {} \;
+  fi
+done
+
+# Build front assets
+cd "$BUILD_FOLDER_FULL_PATH/$THEME_DIR"
+# npm i --dev
+# npm run lessc less/style.less css/style.css
+# npm run lessc less/ckeditor.less css/style-ckeditor.css
+npm install
+npm run "$NPM_RUN_SCRIPT"
+
+
+# Commit stuff into deploy branch
+cd "$BUILD_FOLDER_FULL_PATH"
+
+if [ -z "$(git log --branches --not --remotes)" ] && [ -z "$(git status --porcelain)" ]; then
+  echo "[WARNING] nothing to merge"
+  exit 1
+fi
+
+git add .
+git commit -m "Deploy in $DEPLOY_BRANCH branch"
+
+read -p "Merge done. Voulez vous pousser la branche master ? (y/n)" -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]
+then
+    echo "executing git push"
+    echo
+    git push
+else
+    echo "Aborting -- exiting..."
+    exit 1
+fi
+
+exit 0
