@@ -9,16 +9,6 @@ ARG_CONTEXT=""
 declare -a CONTRIB_DIR_LIST=('vendor' 'web/core' 'web/modules/contrib' 'web/themes/contrib' 'web/profiles/contrib' 'web/libraries');
 declare -a REQUIRED_CONF_VAR_LIST=('GIT_REPO_URL' 'SOURCE_BRANCH' 'DEPLOY_BRANCH' 'BUILD_FOLDER_ROOT' 'BUILD_FOLDER' 'THEME_DIR' 'NPM_RUN_SCRIPT');
 
-
-# GIT_REPO_URL="git@bitbucket.org:slavielle/sylvain-lavielle-net.git"
-# SOURCE_BRANCH="origin/master"
-# DEPLOY_BRANCH="build"
-# BUILD_FOLDER_ROOT="/var/shore/build"
-# BUILD_FOLDER="master"
-# THEME_DIR="web/themes/custom/sla_theme"
-# REMOTE_DRUSH_ALIAS="@dev.dev"
-# NPM_RUN_SCRIPT="build-production"
-
 while [[ $# -gt 0 ]]; do
     case $1 in
 
@@ -112,7 +102,6 @@ while [ "$LOOP" = true ]; do
   REMOTE=$(git rev-parse "$SOURCE_DEPLOY_BRANCH")
   BASE=$(git merge-base @ "$SOURCE_DEPLOY_BRANCH")
 
-  echo ">>>>> $LOCAL $REMOTE $BASE"
   if [ $LOCAL = $REMOTE ]; then
     echo "$SOURCE_DEPLOY_BRANCH local build directory is up to date ... continue"
     LOOP=false
@@ -136,7 +125,7 @@ done
 echo "Merging $SOURCE_BRANCH to $DEPLOY_BRANCH"
 git merge "$SOURCE_BRANCH" --message "Merge $SOURCE_BRANCH to $DEPLOY_BRANCH"
 
-# active gitignore for deploy branch
+# activate gitignore for deploy branch
 cp .gitignore.build .gitignore
 
 # Remove modules to force composer update
@@ -149,12 +138,11 @@ if [ "$OPT_FORCE_PURGE_DEPENDENCIES" = true ]; then
   done
 fi
 
+# Get PHP/Drupal dependencies
 cd "$BUILD_FOLDER_FULL_PATH"
-# Get dependencies
 composer install
 
 # Remove .git dir from some dependencies
-
 for CONTRIB_DIR in "${CONTRIB_DIR_LIST[@]}"; do :
   if [ -d "$BUILD_FOLDER_FULL_PATH/$CONTRIB_DIR" ]; then
     cd "$BUILD_FOLDER_FULL_PATH/$CONTRIB_DIR"
@@ -164,31 +152,24 @@ done
 
 # Build front assets
 cd "$BUILD_FOLDER_FULL_PATH/$THEME_DIR"
-# npm i --dev
-# npm run lessc less/style.less css/style.css
-# npm run lessc less/ckeditor.less css/style-ckeditor.css
 npm install
 npm run "$NPM_RUN_SCRIPT"
 
-
 # Commit stuff into deploy branch
 cd "$BUILD_FOLDER_FULL_PATH"
-
 if [ -z "$(git log --branches --not --remotes)" ] && [ -z "$(git status --porcelain)" ]; then
   echo "[WARNING] nothing to merge"
   exit 1
 fi
-
 git add .
 git commit -m "Deploy in $DEPLOY_BRANCH branch"
 
-read -p "Merge done. Voulez vous pousser la branche master ? (y/n)" -n 1 -r
+read -p "Merge done. Do you want to push on build branch ? (y/n)" -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]
 then
-    echo "executing git push"
-    echo
     git push
+    echo "git push done"
 else
     echo "Aborting -- exiting..."
     exit 1
